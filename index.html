@@ -264,6 +264,77 @@ tbody tr.subtotal td { border-top: 1px solid #fcc; }
   .view-bar { padding: 12px 16px; }
   .table-wrap { padding: 0 12px 12px; }
 }
+
+/* Expiry Warning Section */
+.expiry-warning-section {
+  margin: 16px 24px;
+  padding: 16px 20px;
+  background: linear-gradient(135deg, #fff5f5 0%, #fff0f0 100%);
+  border: 2px solid #fcc;
+  border-radius: 10px;
+}
+.expiry-warning-title {
+  font-size: 15px; font-weight: 700; color: #d00;
+  margin-bottom: 12px;
+}
+.expiry-warning-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.expiry-badge {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; background: #fff; border-radius: 8px;
+  border: 1px solid #fdd;
+}
+.expiry-badge .count { font-size: 24px; font-weight: 700; }
+.expiry-badge .count.critical { color: #d00; }
+.expiry-badge .count.warning { color: #e67e00; }
+.expiry-badge .label { font-size: 12px; color: #888; }
+
+/* Expiry in SKU table */
+td.expiry-critical {
+  color: #d00 !important;
+  font-weight: 700;
+}
+td.expiry-warn {
+  color: #e67e00 !important;
+  font-weight: 600;
+}
+.expiry-expand-btn {
+  cursor: pointer; color: #1a73e8; font-size: 12px;
+  background: none; border: none; padding: 2px 6px;
+}
+.expiry-expand-btn:hover { text-decoration: underline; }
+
+/* Expiry detail row */
+tr.expiry-detail-row { background: #fffbeb; }
+tr.expiry-detail-row td {
+  padding: 6px 12px; font-size: 12px; color: #666;
+  border-bottom: 1px dashed #eee;
+}
+.expiry-detail-table {
+  width: 100%; border-collapse: collapse; margin: 4px 0;
+}
+.expiry-detail-table th {
+  background: #fff7e6; padding: 5px 8px; font-size: 11px;
+  text-align: left; border-bottom: 1px solid #f0d89c;
+}
+.expiry-detail-table td {
+  padding: 4px 8px; font-size: 11px; border-bottom: 1px solid #fef0d0;
+}
+.expiry-detail-table .detail-critical { color: #d00; font-weight: 600; }
+
+/* Expiry sub-upload */
+.expiry-upload-zone {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 14px; border: 1px dashed #ccc; border-radius: 6px;
+  cursor: pointer; font-size: 12px; color: #888; transition: all 0.15s;
+}
+.expiry-upload-zone:hover { border-color: #e0131e; color: #e0131e; }
+.expiry-upload-zone.loaded { border-color: #4caf50; color: #4caf50; background: #f1f8f1; }
+
 </style>
 </head>
 <body>
@@ -299,6 +370,8 @@ let activeView = 'store'; // 'total' | 'store' | 'sku'
 let skuSortKey = null;   // column key for sorting SKU view
 let skuSortDir = 'desc';
 let storeFilter = '';    // store name filter for SKU view
+let expiryData = null;   // { skuMap: Map<sku, {minDays, earliestDate, details[]}> }
+let expandedExpirySkus = new Set();  // track which SKU detail rows are expanded
 
 // ====== 列映射（0-based col index from xlsx header array） ======
 const COL = {
@@ -335,6 +408,149 @@ uploadZone.addEventListener('drop', (e) => {
   uploadZone.classList.remove('dragover');
   handleFiles(e.dataTransfer.files);
 });
+
+// ====== 保质期 CSV 处理 ======
+function handleExpiryFile(file) {
+  if (!file || !file.name.endsWith('.csv')) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const rawText = e.target.result;
+      const expiryRows = parseExpiryCSV(rawText);
+      if (!expiryRows.length) {
+        alert('保质期 CSV 解析失败：未找到有效数据');
+        return;
+      }
+      expiryData = buildExpiryMap(expiryRows);
+      var zone = document.getElementById('expiryUploadZone');
+      if (zone) {
+        zone.classList.add('loaded');
+        zone.innerHTML = '\u2705 保质期已加载 (' + expiryRows.length + ' 条记录, ' + expiryData.size + ' 个SKU)';
+      }
+      renderAll();
+    } catch (err) {
+      alert('解析保质期 CSV 失败: ' + err.message);
+    }
+  };
+  reader.readAsText(file, 'utf-16');
+}
+
+function parseExpiryCSV(rawText) {
+  var text = rawText;
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+
+  var lines = text.split('\n').filter(function(l) { return l.trim(); });
+  if (lines.length < 2) return [];
+
+  var headers = parseCSVLine(lines[0]);
+  var idx = {};
+  for (var i = 0; i < headers.length; i++) {
+    idx[headers[i].trim()] = i;
+  }
+
+  if (!('商品编号' in idx) || !('剩余天数' in idx)) {
+    console.warn('CSV缺少必要列。可用列:', Object.keys(idx));
+    return [];
+  }
+
+  var result = [];
+  for (var r = 1; r < lines.length; r++) {
+    var cols = parseCSVLine(lines[r]);
+    if (cols.length < 2) continue;
+
+    var sku = (cols[idx['商品编号']] || '').trim();
+    var remainingDays = parseInt(cols[idx['剩余天数']]) || 0;
+    var expiryDate = cols[idx['到期日期']] || '';
+    var totalDays = parseInt(cols[idx['保质期天数']]) || 0;
+    var prodDate = cols[idx['生产日期']] || '';
+    var warehouse = cols[idx['库房名']] || '';
+    var distCenter = cols[idx['配送中心']] || '';
+    var qty = parseInt(cols[idx['可用数量']]) || 0;
+    var supplierCode = cols[idx['通知的供应商简码']] || '';
+    var supplierName = cols[idx['通知的供应商名称']] || '';
+    var status = cols[idx['商品状态']] || '';
+    var isReturnable = cols[idx['临期是否可退']] || '';
+
+    if (!sku) continue;
+
+    result.push({
+      sku: sku, remainingDays: remainingDays, expiryDate: expiryDate,
+      totalDays: totalDays, prodDate: prodDate, warehouse: warehouse,
+      distCenter: distCenter, qty: qty, supplierCode: supplierCode,
+      supplierName: supplierName, status: status, isReturnable: isReturnable
+    });
+  }
+  return result;
+}
+
+function parseCSVLine(line) {
+  var result = [];
+  var current = '';
+  var inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (i + 1 < line.length && line[i + 1] === '"') {
+          current += '"'; i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else {
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        result.push(current); current = '';
+      } else {
+        current += ch;
+      }
+    }
+  }
+  result.push(current);
+  return result;
+}
+
+function buildExpiryMap(rows) {
+  var skuMap = new Map();
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (!skuMap.has(r.sku)) {
+      skuMap.set(r.sku, {
+        minDays: Infinity,
+        earliestDate: '',
+        totalQty: 0,
+        details: []
+      });
+    }
+    var entry = skuMap.get(r.sku);
+    if (r.remainingDays < entry.minDays) {
+      entry.minDays = r.remainingDays;
+      entry.earliestDate = r.expiryDate;
+    }
+    entry.totalQty += r.qty;
+    entry.details.push(r);
+  }
+  // Sort details by remainingDays asc
+  var entries = skuMap.entries();
+  var iter = entries.next();
+  while (!iter.done) {
+    iter.value[1].details.sort(function(a, b) { return a.remainingDays - b.remainingDays; });
+    iter = entries.next();
+  }
+  return skuMap;
+}
+
+function toggleExpiryDetail(sku) {
+  if (expandedExpirySkus.has(sku)) {
+    expandedExpirySkus.delete(sku);
+  } else {
+    expandedExpirySkus.add(sku);
+  }
+  renderAll();
+}
 
 function handleFiles(files) {
   if (!files || !files.length) return;
@@ -524,6 +740,10 @@ function switchBrand(id) {
   storeFilter = '';
   skuSortKey = null;
   skuSortDir = 'desc';
+  expiryData = null;
+  expandedExpirySkus = new Set();
+  var zone2 = document.getElementById('expiryUploadZone');
+  if (zone2) { zone2.classList.remove('loaded'); zone2.innerHTML = '📅 上传保质期'; }
   renderAll();
 }
 
@@ -572,6 +792,72 @@ function renderDashboard() {
     skuData = [...skuData].sort((a, b) => b.spotAmount - a.spotAmount);
   }
 
+  // ---- 保质期预警区域 ----
+  var expiryWarningHtml = '';
+  if (expiryData && expiryData.size > 0) {
+    var criticalCount = 0, warnCount = 0;
+    var criticalSkus = [];
+    var entries = expiryData.entries();
+    var iter = entries.next();
+    while (!iter.done) {
+      var esku = iter.value[0];
+      var info = iter.value[1];
+      if (info.minDays <= 90) {
+        if (info.minDays <= 30) criticalCount++;
+        else warnCount++;
+        criticalSkus.push({ sku: esku, minDays: info.minDays, earliestDate: info.earliestDate, totalQty: info.totalQty, details: info.details });
+      }
+      iter = entries.next();
+    }
+    criticalSkus.sort(function(a, b) { return a.minDays - b.minDays; });
+
+    if (criticalSkus.length > 0) {
+      expiryWarningHtml = '<div class="expiry-warning-section">' +
+        '<div class="expiry-warning-title">\u26a0\ufe0f 临期预警 \u2014 ' + criticalSkus.length + ' 个SKU剩余不足90天</div>' +
+        '<div class="expiry-warning-grid">' +
+        '<div class="expiry-badge"><span class="count critical">' + criticalCount + '</span><span class="label">严重临期（\u226430天）</span></div>' +
+        '<div class="expiry-badge"><span class="count warning">' + warnCount + '</span><span class="label">一般临期（31-90天）</span></div>' +
+        '<div class="expiry-badge"><span class="count">' + expiryData.size + '</span><span class="label">已匹配SKU总数</span></div>' +
+        '</div>' +
+        '<table style="width:100%;font-size:12px;border-collapse:collapse;">' +
+        '<thead><tr style="background:#fff0f0;">' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">商品名称</th>' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">SKU</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">最少剩余天数</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">最早到期日</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">涉及仓库</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">可用数量</th>' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">供应商</th>' +
+        '</tr></thead><tbody>' +
+        criticalSkus.map(function(e) {
+          var daysClass = e.minDays <= 30 ? 'expiry-critical' : 'expiry-warn';
+          var skuName = null;
+          for (var di = 0; di < data.length; di++) {
+            if (String(data[di].mainSku) === e.sku || String(data[di].productCode) === e.sku) {
+              skuName = data[di]; break;
+            }
+          }
+          var productName = skuName ? skuName.productName : '';
+          var warehouses = [];
+          var suppliers = [];
+          for (var di = 0; di < e.details.length; di++) {
+            if (warehouses.indexOf(e.details[di].distCenter) < 0) warehouses.push(e.details[di].distCenter);
+            if (e.details[di].supplierName && suppliers.indexOf(e.details[di].supplierName) < 0) suppliers.push(e.details[di].supplierName);
+          }
+          return '<tr>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;">' + escapeHtml(String(productName).slice(0, 30)) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;font-family:monospace;font-size:11px;">' + escapeHtml(e.sku) + '</td>' +
+            '<td class="' + daysClass + '" style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + e.minDays + '天</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + escapeHtml(e.earliestDate) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;font-size:11px;">' + escapeHtml(warehouses.join(', ')) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + e.totalQty + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;font-size:11px;">' + escapeHtml(suppliers.join(', ')) + '</td>' +
+            '</tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+  }
+
   // ---- 汇总卡片 ----
   const cardHtml = `
     <div class="summary-cards">
@@ -617,7 +903,11 @@ function renderDashboard() {
           ${stores.map(s => `<option value="${escapeHtml(s)}"${storeFilter === s ? ' selected' : ''}>${escapeHtml(s)}</option>`).join('')}
         </select>
       </div>` : ''}
-      <div class="file-info">📄 ${escapeHtml(brand.fileName)} · ${data.length} 条记录</div>
+      <div class="expiry-upload-zone" id="expiryUploadZone" onclick="document.getElementById('expiryFileInput').click()" title="上传保质期CSV">
+      📅 上传保质期
+    </div>
+    <input type="file" id="expiryFileInput" accept=".csv" style="display:none" onchange="handleExpiryFile(this.files[0])">
+    <div class="file-info">📄 ${escapeHtml(brand.fileName)} · ${data.length} 条记录</div>
     </div>`;
 
   // ---- 表格 ----
@@ -705,6 +995,9 @@ function renderDashboard() {
             <th class="sortable${sortArrow('out7d')}" onclick="sortSku('out7d')">7日出库</th>
             <th class="sortable${sortArrow('turnover')}" onclick="sortSku('turnover')">库存周转</th>
             <th>采购价</th>
+            <th>最早到期日</th>
+            <th>最少剩余天数</th>
+            <th>保质期明细</th>
           </tr>
         </thead>
         <tbody>
@@ -722,6 +1015,42 @@ function renderDashboard() {
             <td>${fmtQty(r.out7d)}</td>
             <td>${Number(r.turnover).toFixed(1)}天</td>
             <td>¥${Number(r.purchasePrice).toFixed(2)}</td>
+            ${(function() {
+              var skuKey = String(r.mainSku || r.productCode || '');
+              var expInfo = expiryData ? expiryData.get(skuKey) : null;
+              if (!expInfo) {
+                return '<td>-</td><td>-</td><td>-</td>';
+              }
+              var daysClass = expInfo.minDays <= 30 ? 'expiry-critical' : (expInfo.minDays <= 90 ? 'expiry-warn' : '');
+              var isExpanded = expandedExpirySkus.has(skuKey);
+              var detailRows = '';
+              if (isExpanded) {
+                detailRows = '<tr class="expiry-detail-row"><td colspan="15">' +
+                  '<table class="expiry-detail-table"><thead><tr>' +
+                  '<th>仓库</th><th>配送中心</th><th>生产日期</th><th>到期日期</th><th>剩余天数</th><th>可用数量</th><th>供应商</th><th>状态</th><th>是否可退</th>' +
+                  '</tr></thead><tbody>' +
+                  expInfo.details.map(function(d) {
+                    var dClass = d.remainingDays <= 30 ? 'detail-critical' : (d.remainingDays <= 90 ? 'expiry-warn' : '');
+                    return '<tr>' +
+                      '<td>' + escapeHtml(d.warehouse) + '</td>' +
+                      '<td>' + escapeHtml(d.distCenter) + '</td>' +
+                      '<td>' + escapeHtml(d.prodDate) + '</td>' +
+                      '<td>' + escapeHtml(d.expiryDate) + '</td>' +
+                      '<td class="' + dClass + '">' + d.remainingDays + '天</td>' +
+                      '<td>' + d.qty + '</td>' +
+                      '<td>' + escapeHtml(d.supplierName || d.supplierCode) + '</td>' +
+                      '<td>' + escapeHtml(d.status) + '</td>' +
+                      '<td>' + escapeHtml(d.isReturnable) + '</td>' +
+                      '</tr>';
+                  }).join('') +
+                  '</tbody></table></td></tr>';
+              }
+              return '<td>' + escapeHtml(expInfo.earliestDate) + '</td>' +
+                '<td class="' + daysClass + '">' + expInfo.minDays + '天</td>' +
+                '<td><button class="expiry-expand-btn" onclick="toggleExpiryDetail(\'' + skuKey.replace(/'/g, '\\\'') + '\')">' +
+                (isExpanded ? '收起 ▲' : '展开 ▼') + ' (' + expInfo.details.length + '批)</button></td>' +
+                detailRows;
+            })()}
           </tr>`).join('')}
         </tbody>
       </table>
@@ -729,7 +1058,7 @@ function renderDashboard() {
     </div>`;
   }
 
-  document.getElementById('dashboard').innerHTML = cardHtml + viewBarHtml + tableHtml;
+  document.getElementById('dashboard').innerHTML = expiryWarningHtml + cardHtml + viewBarHtml + tableHtml;
 }
 
 function switchView(view) {
