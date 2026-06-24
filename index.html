@@ -433,7 +433,18 @@ function handleExpiryFile(file) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const rawText = e.target.result;
+      const buffer = e.target.result;
+      const bytes = new Uint8Array(buffer);
+      let rawText;
+      if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+        rawText = new TextDecoder('utf-16le').decode(buffer);
+      } else {
+        try {
+          rawText = new TextDecoder('gbk').decode(buffer);
+        } catch (decErr) {
+          rawText = new TextDecoder('utf-8').decode(buffer);
+        }
+      }
       const expiryRows = parseExpiryCSV(rawText);
       if (!expiryRows.length) {
         alert('保质期 CSV 解析失败：未找到有效数据');
