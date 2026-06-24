@@ -351,7 +351,7 @@ tr.expiry-detail-row td {
 
 <div class="expiry-upload-bar" id="expiryUploadBar" style="margin:0 32px 16px;display:flex;align-items:center;gap:12px;padding:10px 16px;background:#fff;border-radius:8px;border:1px solid #eee;font-size:13px;">
   <span style="color:#888;">📅 <strong>保质期监控</strong>（可选）</span>
-  <span id="expiryStatus" style="color:#bbb;">上传保质期 CSV，自动按 SKU 匹配，剩余 &lt; 90 天自动预警</span><button id="expiryRemoveBtn" onclick="removeExpiryData()" style="display:none;padding:5px 12px;background:#e74c3c;color:#fff;border:none;border-radius:14px;cursor:pointer;font-size:12px;">删除</button>
+  <span id="expiryStatus" style="color:#bbb;">上传保质期 CSV，自动按 SKU 匹配，剩余 &lt; 90 天自动预警</span><button id="expiryRemoveBtn" onclick="removeExpiryData()" style="display:none;padding:5px 12px;background:#e74c3c;color:#fff;border:none;border-radius:14px;cursor:pointer;font-size:12px;margin-left:8px;">删除</button>
   <button id="expiryUploadBtn" onclick="document.getElementById('expiryFileInput').click()" style="margin-left:auto;padding:7px 18px;background:#c0392b;color:#fff;border:none;border-radius:18px;cursor:pointer;font-size:13px;font-weight:500;">上传保质期 CSV</button>
   <input type="file" id="expiryFileInput" accept=".csv" style="display:none" onchange="handleExpiryFile(this.files[0])">
 </div>
@@ -420,7 +420,7 @@ function removeExpiryData() {
   if (bar) { bar.style.background = '#fff'; bar.style.border = '1px solid #eee'; }
   var status = document.getElementById('expiryStatus');
   if (status) { status.innerHTML = '上传保质期 CSV，自动按 SKU 匹配，剩余 < 90 天自动预警'; status.style.color = '#bbb'; }
-  var upBtn = bar ? document.getElementById('expiryUploadBtn') : null;
+  var upBtn = document.getElementById('expiryUploadBtn');
   if (upBtn) { upBtn.textContent = '上传保质期 CSV'; upBtn.style.background = '#c0392b'; }
   var rmBtn = document.getElementById('expiryRemoveBtn');
   if (rmBtn) { rmBtn.style.display = 'none'; }
@@ -433,14 +433,26 @@ function handleExpiryFile(file) {
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
-      const rawText = e.target.result;
+      const buffer = e.target.result;
+      const bytes = new Uint8Array(buffer);
+      let rawText;
+      if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) {
+        rawText = new TextDecoder('utf-16le').decode(buffer);
+      } else {
+        try {
+          rawText = new TextDecoder('gbk').decode(buffer);
+        } catch (decErr) {
+          rawText = new TextDecoder('utf-8').decode(buffer);
+        }
+      }
       const expiryRows = parseExpiryCSV(rawText);
       if (!expiryRows.length) {
-        alert('保质期 CSV 解析失败：未找到有效数据');
+        alert('保质期 CSV 解析失败：未找到有效数据
+请确认文件包含「商品编号」和「剩余天数」两列');
         return;
       }
       expiryData = buildExpiryMap(expiryRows);
-      var zone = document.getElementById('expiryUploadZone');
+      var bar = document.getElementById('expiryUploadBar');
       if (zone) {
         zone.classList.add('loaded');
         zone.innerHTML = '\u2705 保质期已加载 (' + expiryRows.length + ' 条记录, ' + expiryData.size + ' 个SKU)';
@@ -450,7 +462,7 @@ function handleExpiryFile(file) {
       alert('解析保质期 CSV 失败: ' + err.message);
     }
   };
-  reader.readAsText(file, 'utf-16');
+  reader.readAsArrayBuffer(file);
 }
 
 function parseExpiryCSV(rawText) {
