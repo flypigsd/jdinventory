@@ -857,6 +857,16 @@ function renderDashboard() {
       }
       return bAmt - aAmt;
     });
+    // Filter out SKUs with zero inventory amount
+    criticalSkus = criticalSkus.filter(function(e) {
+      var found = null;
+      for (var di = 0; di < data.length; di++) {
+        if (String(data[di].productCode) === e.sku || String(data[di].mainSku) === e.sku) {
+          found = data[di]; break;
+        }
+      }
+      return found && found.spotAmount > 0;
+    });
 
     if (criticalSkus.length > 0) {
       expiryWarningHtml = '<div class="expiry-warning-section">' +
@@ -1033,8 +1043,7 @@ function renderDashboard() {
       <table>
         <thead>
           <tr>
-            <th>商品编码</th><th>商品名称</th><th>商品主SKU</th>
-            <th>品牌</th><th>店铺名称</th>
+            <th>商品编码</th><th>商品名称</th><th>品牌</th><th>店铺名称</th>
             <th class="sortable${sortArrow('spotQty')}" onclick="sortSku('spotQty')">现货库存数量</th>
             <th class="sortable${sortArrow('spotAmount')}" onclick="sortSku('spotAmount')">现货库存金额</th>
             <th class="sortable${sortArrow('inTransitQty')}" onclick="sortSku('inTransitQty')">在途数量</th>
@@ -1052,7 +1061,6 @@ function renderDashboard() {
           <tr>
             <td><span class="cell-sku">${escapeHtml(String(r.productCode))}</span></td>
             <td>${escapeHtml(String(r.productName).slice(0, 40))}${String(r.productName).length > 40 ? '...' : ''}</td>
-            <td><span class="cell-sku">${escapeHtml(String(r.mainSku))}</span></td>
             <td>${escapeHtml(String(r.brand))}</td>
             <td>${escapeHtml(String(r.storeName))}</td>
             <td class="cell-amount">${fmtQty(r.spotQty)}</td>
