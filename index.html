@@ -812,41 +812,72 @@ function renderDashboard() {
       if (info.minDays <= 90) {
         if (info.minDays <= 30) criticalCount++;
         else warnCount++;
-        criticalSkus.push({ sku: esku, minDays: info.minDays, earliestDate: info.earliestDate, totalQty: info.totalQty, details: info.details });
+      }
+      criticalSkus.push({ sku: esku, minDays: info.minDays, earliestDate: info.earliestDate, totalQty: info.totalQty, details: info.details });
       iter = entries.next();
     }
-    // Sort ALL matched SKUs by inventory amount descending
+    // Sort by inventory amount descending (look up from procurement data)
     criticalSkus.sort(function(a, b) {
-      var aSku = null, bSku = null;
+      var aAmt = 0, bAmt = 0;
       for (var di = 0; di < data.length; di++) {
-        if (String(data[di].mainSku) === a.sku || String(data[di].productCode) === a.sku) aSku = data[di];
-        if (String(data[di].mainSku) === b.sku || String(data[di].productCode) === b.sku) bSku = data[di];
+        if (String(data[di].mainSku) === a.sku || String(data[di].productCode) === a.sku) aAmt = data[di].spotAmount || 0;
+        if (String(data[di].mainSku) === b.sku || String(data[di].productCode) === b.sku) bAmt = data[di].spotAmount || 0;
       }
-      var aAmt = aSku ? aSku.spotAmount : 0;
-      var bAmt = bSku ? bSku.spotAmount : 0;
       return bAmt - aAmt;
     });
 
     if (criticalSkus.length > 0) {
       expiryWarningHtml = '<div class="expiry-warning-section">' +
-        '<div class="expiry-warning-title">\U0001f4c5 保质期总览 \u2014 共匹配 ' + expiryData.size + ' 个SKU</div>' +
+        '<div class="expiry-warning-title">📅 保质期总览 \u2014 共匹配 ' + expiryData.size + ' 个SKU</div>' +
         '<div class="expiry-warning-grid">' +
-        '<div class="expiry-badge"><span class="count critical">' + criticalCount + '</span><span class="label">\U0001f534 严重临期\uff08\u226430天\uff09</span></div>' +
-        '<div class="expiry-badge"><span class="count warning">' + warnCount + '</span><span class="label">\U0001f7e0 一般临期\uff0831-90天\uff09</span></div>' +
-        '<div class="expiry-badge"><span class="count">' + (expiryData.size - criticalCount - warnCount) + '</span><span class="label">\U0001f7e2 正常\uff08>90天\uff09</span></div>' +
+        '<div class="expiry-badge"><span class="count critical">' + criticalCount + '</span><span class="label">严重临期（\u226430天）</span></div>' +
+        '<div class="expiry-badge"><span class="count warning">' + warnCount + '</span><span class="label">一般临期（31-90天）</span></div>' +
+        '<div class="expiry-badge"><span class="count">' + (expiryData.size - criticalCount - warnCount) + '</span><span class="label">正常（>90天）</span></div>' +
         '</div>' +
         '<table style="width:100%;font-size:12px;border-collapse:collapse;">' +
-        '<thead><tr style="background:#fafafa;">' +
-        '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;">商品名称</th>' +
-        '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;">SKU</th>' +
-        '<th style="text-align:right;padding:6px 8px;border-bottom:2px solid #eee;">现货库存金额</th>' +
-        '<th style="padding:6px 8px;border-bottom:2px solid #eee;">最少剩余天数</th>' +
-        '<th style="padding:6px 8px;border-bottom:2px solid #eee;">最早到期日</th>' +
-        '<th style="padding:6px 8px;border-bottom:2px solid #eee;">涉及仓库</th>' +
-        '<th style="text-align:right;padding:6px 8px;border-bottom:2px solid #eee;">可用数量</th>' +
-        '<th style="text-align:left;padding:6px 8px;border-bottom:2px solid #eee;">供应商</th>' +
+        '<thead><tr style="background:#fff0f0;">' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">商品名称</th>' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">商品名称</th>' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">SKU</th>' +
+        '<th style="text-align:right;padding:6px 8px;border-bottom:1px solid #fcc;">现货库存金额</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">最少剩余天数</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">最早到期日</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">涉及仓库</th>' +
+        '<th style="padding:6px 8px;border-bottom:1px solid #fcc;">可用数量</th>' +
+        '<th style="text-align:left;padding:6px 8px;border-bottom:1px solid #fcc;">供应商</th>' +
         '</tr></thead><tbody>' +
-        criticalSkus.map(function(e) {// ---- 汇总卡片 ----
+        criticalSkus.map(function(e) {
+          var daysClass = e.minDays <= 30 ? 'expiry-critical' : (e.minDays <= 90 ? 'expiry-warn' : '');
+          var skuName = null;
+          for (var di = 0; di < data.length; di++) {
+            if (String(data[di].mainSku) === e.sku || String(data[di].productCode) === e.sku) {
+              skuName = data[di]; break;
+            }
+          }
+          var productName = skuName ? skuName.productName : '';
+          var spotAmount = skuName ? skuName.spotAmount : 0;
+          var warehouses = [];
+          var suppliers = [];
+          for (var di = 0; di < e.details.length; di++) {
+            if (warehouses.indexOf(e.details[di].distCenter) < 0) warehouses.push(e.details[di].distCenter);
+            if (e.details[di].supplierName && suppliers.indexOf(e.details[di].supplierName) < 0) suppliers.push(e.details[di].supplierName);
+          }
+          return '<tr>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;">' + escapeHtml(String(productName).slice(0, 30)) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;font-family:monospace;font-size:11px;">' + escapeHtml(e.sku) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:right;font-weight:600;">' + (spotAmount >= 10000 ? '¥'+(spotAmount/10000).toFixed(1)+'万' : '¥'+spotAmount.toFixed(0)) + '</td>' +
+            '<td class="' + daysClass + '" style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + e.minDays + '天</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + escapeHtml(e.earliestDate) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;font-size:11px;">' + escapeHtml(warehouses.join(', ')) + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;text-align:center;">' + e.totalQty + '</td>' +
+            '<td style="padding:5px 8px;border-bottom:1px solid #fef0d0;font-size:11px;">' + escapeHtml(suppliers.join(', ')) + '</td>' +
+            '</tr>';
+        }).join('') +
+        '</tbody></table></div>';
+    }
+  }
+
+  // ---- 汇总卡片 ----
   const cardHtml = `
     <div class="summary-cards">
       <div class="summary-card">
