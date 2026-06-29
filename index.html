@@ -388,7 +388,7 @@ const COL = {
   out7d:       '全国7日出库销量',
   turnover:    '全国数量周转',
   inTransitQty:'全国采购未到货',
-  purchasePrice:'全国采购价',
+  purchasePrice:'全国仓报价',
   spotCost:    '全国现货库存成本',
 };
 
@@ -1050,7 +1050,7 @@ function renderDashboard() {
             <th class="sortable${sortArrow('inTransitAmount')}" onclick="sortSku('inTransitAmount')">在途金额</th>
             <th class="sortable${sortArrow('out7d')}" onclick="sortSku('out7d')">7日出库</th>
             <th class="sortable${sortArrow('turnover')}" onclick="sortSku('turnover')">库存周转</th>
-            <th>采购价</th>
+            <th>仓报价</th>
             <th>最早到期日</th>
             <th>最少剩余天数</th>
             <th>保质期明细</th>
